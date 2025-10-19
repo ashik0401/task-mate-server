@@ -14,12 +14,13 @@ const supabase = createClient(
 );
 
 const client = new MongoClient(process.env.MONGO_URI);
-let db, tasksCollection;
+let db, tasksCollection, usersCollection;
 
 async function connectDB() {
   await client.connect();
   db = client.db("TaskMate");
   tasksCollection = db.collection("tasks");
+  usersCollection = db.collection("users");
   console.log("MongoDB connected");
 }
 connectDB().catch(console.error);
@@ -38,20 +39,12 @@ async function verifyUser(req, res, next) {
   }
 }
 
+
 app.post("/tasks", verifyUser, async (req, res) => {
   try {
     const { title, description, priority, status, assignedUser, dueDate } = req.body;
     if (!title || !assignedUser) return res.status(400).json({ error: "Missing required fields" });
-    const task = {
-      title,
-      description,
-      priority,
-      status,
-      assignedUser,
-      dueDate,
-      createdBy: req.user.email,
-      createdAt: new Date(),
-    };
+    const task = { title, description, priority, status, assignedUser, dueDate, createdBy: req.user.email, createdAt: new Date() };
     const result = await tasksCollection.insertOne(task);
     res.json({ ...task, _id: result.insertedId });
   } catch (err) {
@@ -59,10 +52,22 @@ app.post("/tasks", verifyUser, async (req, res) => {
   }
 });
 
-app.get("/tasks", async (req, res) => {
+app.get("/tasks", verifyUser, async (req, res) => {
   try {
-    const tasks = await tasksCollection.find().toArray();
+    const tasks = await tasksCollection.find().sort({ createdAt: -1 }).toArray();
     res.json(tasks);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/tasks/:id", verifyUser, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid task ID" });
+    const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
+    if (!task) return res.status(404).json({ error: "Task not found" });
+    res.json(task);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -71,40 +76,51 @@ app.get("/tasks", async (req, res) => {
 app.patch("/tasks/:id", verifyUser, async (req, res) => {
   try {
     const { id } = req.params;
-
     if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid task ID" });
-
     const updates = req.body;
-
-    // Optional: check if current user is the creator
     const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
     if (!task) return res.status(404).json({ error: "Task not found" });
-
-    if (task.createdBy !== req.user.email) {
-      return res.status(403).json({ error: "You cannot edit this task" });
-    }
-
+    if (task.createdBy !== req.user.email) return res.status(403).json({ error: "You cannot edit this task" });
     const result = await tasksCollection.findOneAndUpdate(
       { _id: new ObjectId(id) },
       { $set: updates },
       { returnDocument: "after" }
     );
-
     res.json(result.value);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-
 app.delete("/tasks/:id", verifyUser, async (req, res) => {
   try {
     const { id } = req.params;
     if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid task ID" });
-
     const result = await tasksCollection.deleteOne({ _id: new ObjectId(id) });
     if (result.deletedCount === 0) return res.status(404).json({ error: "Task not found" });
     res.json({ message: "Task deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+app.post("/users", async (req, res) => {
+  try {
+    const { username, email, avatar_url } = req.body;
+    if (!username || !email) return res.status(400).json({ error: "Missing fields" });
+    const user = { username, email, avatar_url, createdAt: new Date() };
+    const result = await usersCollection.insertOne(user);
+    res.status(201).json({ ...user, _id: result.insertedId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/users", verifyUser, async (req, res) => {
+  try {
+    const users = await usersCollection.find().sort({ createdAt: -1 }).toArray();
+    res.json(users);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
