@@ -10,12 +10,13 @@ app.use(express.json());
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 const client = new MongoClient(process.env.MONGO_URI);
-let db, tasksCollection;
+let db, tasksCollection, usersCollection;
 
 async function connectDB() {
   await client.connect();
   db = client.db("TaskMate");
   tasksCollection = db.collection("tasks");
+  usersCollection = db.collection("users");
 }
 connectDB().catch(console.error);
 
@@ -66,10 +67,22 @@ app.get("/tasks", async (req, res) => {
   res.json(tasks);
 });
 
+app.get("/tasks/:id", async (req, res) => {
+  const task = await tasksCollection.findOne({ _id: new ObjectId(req.params.id) });
+  if (!task) return res.status(404).json({ error: "Task not found" });
+  task._id = task._id.toString();
+  res.json(task);
+});
+
+app.get("/users", async (req, res) => {
+  const users = await usersCollection.find().toArray();
+  users.forEach(u => u._id = u._id.toString());
+  res.json(users);
+});
+
 app.get("/", (req, res) => {
   res.send("Server is running");
 });
-
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
