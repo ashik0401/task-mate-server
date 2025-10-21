@@ -48,7 +48,6 @@ app.post("/tasks", verifyUser, async (req, res) => {
 
     const task = { title, description, priority, status, assignedUser, dueDate, createdBy: req.user.email, createdAt: new Date() };
     const result = await tasksCollection.insertOne(task);
-
     const insertedId = result.insertedId.toString();
 
     await supabase.from("task_events").insert([{
@@ -80,7 +79,7 @@ app.post("/tasks", verifyUser, async (req, res) => {
   }
 });
 
-app.get("/tasks", verifyUser, async (req, res) => {
+app.get("/tasks", async (req, res) => {
   try {
     const tasks = await tasksCollection.find().sort({ createdAt: -1 }).toArray();
     tasks.forEach(t => t._id = t._id.toString());
@@ -183,7 +182,7 @@ app.post("/users", async (req, res) => {
   }
 });
 
-app.get("/users", verifyUser, async (req, res) => {
+app.get("/users", async (req, res) => {
   try {
     const users = await usersCollection.find().sort({ createdAt: -1 }).toArray();
     users.forEach(u => u._id = u._id.toString());
@@ -193,8 +192,9 @@ app.get("/users", verifyUser, async (req, res) => {
   }
 });
 
+app.get("/", (req, res) => {
+  res.send("Backend is running!");
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
-
-
