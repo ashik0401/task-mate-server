@@ -5,7 +5,7 @@ const { MongoClient, ObjectId } = require("mongodb");
 const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
-app.use(cors({ origin: process.env.FRONTEND_URL || "http://localhost:3000", credentials: true }));
+app.use(cors({ origin: process.env.NEXT_FRONTEND_URL || "http://localhost:3000", credentials: true }));
 app.use(express.json());
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
