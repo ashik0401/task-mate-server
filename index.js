@@ -9,16 +9,17 @@ app.use(cors({ origin: process.env.NEXT_FRONTEND_URL || "http://localhost:3000",
 app.use(express.json());
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
-const client = new MongoClient(process.env.MONGO_URI);
-let db, tasksCollection, usersCollection;
 
-async function connectDB() {
-  await client.connect();
-  db = client.db("TaskMate");
-  tasksCollection = db.collection("tasks");
-  usersCollection = db.collection("users");
+let dbClient;
+
+async function getDb() {
+  if (!dbClient) {
+    const client = new MongoClient(process.env.MONGO_URI);
+    await client.connect();
+    dbClient = client.db("TaskMate");
+  }
+  return dbClient;
 }
-connectDB().catch(console.error);
 
 async function verifyUser(req, res, next) {
   try {
@@ -40,6 +41,8 @@ app.post("/tasks", verifyUser, async (req, res) => {
     const { title, description, priority, status, assignedUser, dueDate } = req.body;
     if (!title || !assignedUser) return res.status(400).json({ error: "Missing required fields" });
     const task = { title, description, priority, status, assignedUser, dueDate, createdBy: req.user.email, createdAt: new Date() };
+    const db = await getDb();
+    const tasksCollection = db.collection("tasks");
     const result = await tasksCollection.insertOne(task);
     const insertedId = result.insertedId.toString();
     await supabase.from("task_events").insert([{ action: "CREATE", task_title: title, task_id: insertedId, performed_by: req.user.email, performed_by_id: req.user.id, created_by: req.user.email, timestamp: new Date().toISOString(), broadcast: true }]);
@@ -52,6 +55,8 @@ app.post("/tasks", verifyUser, async (req, res) => {
 
 app.get("/tasks", async (req, res) => {
   try {
+    const db = await getDb();
+    const tasksCollection = db.collection("tasks");
     const tasks = await tasksCollection.find().sort({ createdAt: -1 }).toArray();
     tasks.forEach(t => t._id = t._id.toString());
     res.json(tasks);
@@ -64,6 +69,8 @@ app.get("/tasks/:id", verifyUser, async (req, res) => {
   try {
     const { id } = req.params;
     if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid task ID" });
+    const db = await getDb();
+    const tasksCollection = db.collection("tasks");
     const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
     if (!task) return res.status(404).json({ error: "Task not found" });
     task._id = task._id.toString();
@@ -80,6 +87,8 @@ app.patch("/tasks/:id", verifyUser, async (req, res) => {
     const { title, description, priority, status, assignedUser, dueDate } = req.body;
     if (!title || !assignedUser) return res.status(400).json({ error: "Missing required fields" });
     const updatedTask = { title, description, priority, status, assignedUser, dueDate, updatedAt: new Date() };
+    const db = await getDb();
+    const tasksCollection = db.collection("tasks");
     const result = await tasksCollection.updateOne({ _id: new ObjectId(id) }, { $set: updatedTask });
     if (result.matchedCount === 0) return res.status(404).json({ error: "Task not found" });
     await supabase.from("task_events").insert([{ action: "UPDATE", task_title: title, task_id: id, performed_by: req.user.email, performed_by_id: req.user.id, timestamp: new Date().toISOString(), broadcast: true }]);
@@ -94,6 +103,8 @@ app.delete("/tasks/:id", verifyUser, async (req, res) => {
   try {
     const { id } = req.params;
     if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid task ID" });
+    const db = await getDb();
+    const tasksCollection = db.collection("tasks");
     const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
     if (!task) return res.status(404).json({ error: "Task not found" });
     await tasksCollection.deleteOne({ _id: new ObjectId(id) });
@@ -110,6 +121,8 @@ app.post("/users", async (req, res) => {
     const { username, email, avatar_url } = req.body;
     if (!username || !email) return res.status(400).json({ error: "Missing fields" });
     const user = { username, email, avatar_url, createdAt: new Date() };
+    const db = await getDb();
+    const usersCollection = db.collection("users");
     const result = await usersCollection.insertOne(user);
     res.status(201).json({ ...user, _id: result.insertedId.toString() });
   } catch (err) {
@@ -119,6 +132,8 @@ app.post("/users", async (req, res) => {
 
 app.get("/users", async (req, res) => {
   try {
+    const db = await getDb();
+    const usersCollection = db.collection("users");
     const users = await usersCollection.find().sort({ createdAt: -1 }).toArray();
     users.forEach(u => u._id = u._id.toString());
     res.json(users);
