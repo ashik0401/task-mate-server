@@ -9,17 +9,15 @@ app.use(cors({ origin: process.env.NEXT_FRONTEND_URL || "http://localhost:3000",
 app.use(express.json());
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+const client = new MongoClient(process.env.MONGO_URI);
+let db, tasksCollection;
 
-let dbClient;
-
-async function getDb() {
-  if (!dbClient) {
-    const client = new MongoClient(process.env.MONGO_URI);
-    await client.connect();
-    dbClient = client.db("TaskMate");
-  }
-  return dbClient;
+async function connectDB() {
+  await client.connect();
+  db = client.db("TaskMate");
+  tasksCollection = db.collection("tasks");
 }
+connectDB().catch(console.error);
 
 async function verifyUser(req, res, next) {
   try {
@@ -37,113 +35,35 @@ async function verifyUser(req, res, next) {
 }
 
 app.post("/tasks", verifyUser, async (req, res) => {
-  try {
-    const { title, description, priority, status, assignedUser, dueDate } = req.body;
-    if (!title || !assignedUser) return res.status(400).json({ error: "Missing required fields" });
-    const task = { title, description, priority, status, assignedUser, dueDate, createdBy: req.user.email, createdAt: new Date() };
-    const db = await getDb();
-    const tasksCollection = db.collection("tasks");
-    const result = await tasksCollection.insertOne(task);
-    const insertedId = result.insertedId.toString();
-    await supabase.from("task_events").insert([{ action: "CREATE", task_title: title, task_id: insertedId, performed_by: req.user.email, performed_by_id: req.user.id, created_by: req.user.email, timestamp: new Date().toISOString(), broadcast: true }]);
-    await supabase.from("tasks").insert([{ mongo_id: insertedId, title, description, priority, status, assigned_user: assignedUser, due_date: dueDate, created_by: req.user.email, created_at: new Date().toISOString() }]);
-    res.json({ ...task, _id: insertedId });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get("/tasks", async (req, res) => {
-  try {
-    const db = await getDb();
-    const tasksCollection = db.collection("tasks");
-    const tasks = await tasksCollection.find().sort({ createdAt: -1 }).toArray();
-    tasks.forEach(t => t._id = t._id.toString());
-    res.json(tasks);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get("/tasks/:id", verifyUser, async (req, res) => {
-  try {
-    const { id } = req.params;
-    if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid task ID" });
-    const db = await getDb();
-    const tasksCollection = db.collection("tasks");
-    const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
-    if (!task) return res.status(404).json({ error: "Task not found" });
-    task._id = task._id.toString();
-    res.json(task);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  const { title, description, priority, status, assignedUser, dueDate } = req.body;
+  const task = { title, description, priority, status, assignedUser, dueDate, createdBy: req.user.email, createdAt: new Date() };
+  const result = await tasksCollection.insertOne(task);
+  const insertedId = result.insertedId.toString();
+  await supabase.from("notifications").insert([{ user_id: req.user.id, task_id: insertedId, action: "CREATE", title, created_at: new Date().toISOString() }]);
+  res.json({ ...task, _id: insertedId });
 });
 
 app.patch("/tasks/:id", verifyUser, async (req, res) => {
-  try {
-    const { id } = req.params;
-    if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid task ID" });
-    const { title, description, priority, status, assignedUser, dueDate } = req.body;
-    if (!title || !assignedUser) return res.status(400).json({ error: "Missing required fields" });
-    const updatedTask = { title, description, priority, status, assignedUser, dueDate, updatedAt: new Date() };
-    const db = await getDb();
-    const tasksCollection = db.collection("tasks");
-    const result = await tasksCollection.updateOne({ _id: new ObjectId(id) }, { $set: updatedTask });
-    if (result.matchedCount === 0) return res.status(404).json({ error: "Task not found" });
-    await supabase.from("task_events").insert([{ action: "UPDATE", task_title: title, task_id: id, performed_by: req.user.email, performed_by_id: req.user.id, timestamp: new Date().toISOString(), broadcast: true }]);
-    await supabase.from("tasks").update({ title, description, priority, status, assigned_user: assignedUser, due_date: dueDate, updated_by: req.user.email, updated_at: new Date().toISOString() }).eq("mongo_id", id);
-    res.json({ message: "Task updated successfully" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  const { id } = req.params;
+  const { title, description, priority, status, assignedUser, dueDate } = req.body;
+  const updatedTask = { title, description, priority, status, assignedUser, dueDate, updatedAt: new Date() };
+  await tasksCollection.updateOne({ _id: new ObjectId(id) }, { $set: updatedTask });
+  await supabase.from("notifications").insert([{ user_id: req.user.id, task_id: id, action: "UPDATE", title, created_at: new Date().toISOString() }]);
+  res.json({ message: "Task updated successfully" });
 });
 
 app.delete("/tasks/:id", verifyUser, async (req, res) => {
-  try {
-    const { id } = req.params;
-    if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid task ID" });
-    const db = await getDb();
-    const tasksCollection = db.collection("tasks");
-    const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
-    if (!task) return res.status(404).json({ error: "Task not found" });
-    await tasksCollection.deleteOne({ _id: new ObjectId(id) });
-    await supabase.from("task_events").insert([{ action: "DELETE", task_title: task.title, task_id: id, performed_by: req.user.email, timestamp: new Date().toISOString(), broadcast: true }]);
-    await supabase.from("tasks").delete().eq("mongo_id", id);
-    res.json({ message: "Task deleted successfully" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  const { id } = req.params;
+  const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
+  await tasksCollection.deleteOne({ _id: new ObjectId(id) });
+  await supabase.from("notifications").insert([{ user_id: req.user.id, task_id: id, action: "DELETE", title: task.title, created_at: new Date().toISOString() }]);
+  res.json({ message: "Task deleted successfully" });
 });
 
-app.post("/users", async (req, res) => {
-  try {
-    const { username, email, avatar_url } = req.body;
-    if (!username || !email) return res.status(400).json({ error: "Missing fields" });
-    const user = { username, email, avatar_url, createdAt: new Date() };
-    const db = await getDb();
-    const usersCollection = db.collection("users");
-    const result = await usersCollection.insertOne(user);
-    res.status(201).json({ ...user, _id: result.insertedId.toString() });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get("/users", async (req, res) => {
-  try {
-    const db = await getDb();
-    const usersCollection = db.collection("users");
-    const users = await usersCollection.find().sort({ createdAt: -1 }).toArray();
-    users.forEach(u => u._id = u._id.toString());
-    res.json(users);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get("/", (req, res) => {
-  res.send("Backend is running!");
+app.get("/tasks", async (req, res) => {
+  const tasks = await tasksCollection.find().sort({ createdAt: -1 }).toArray();
+  tasks.forEach(t => t._id = t._id.toString());
+  res.json(tasks);
 });
 
 const PORT = process.env.PORT || 5000;
